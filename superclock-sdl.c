@@ -43,9 +43,10 @@ struct battery_t {
     double current;
     double voltage;
     double temp;
+    double capacity;
     bool online;
     bool changed;
-} battery = {NAN, NAN, NAN, NAN, false, true};
+} battery = {NAN, NAN, NAN, NAN, NAN, false, true};
 
 struct superclock {
     SDL_Window *win;
@@ -80,7 +81,7 @@ typedef struct ITEM_T {
     SDL_Texture *texture;
     void *custom_data;
 
-    SDL_Texture *(*update)(SDL_Renderer *renderer, void *);
+    SDL_Texture *(*update)(SDL_Renderer *renderer, struct ITEM_T *);
 
     bool texture_changed;
     align_t align;
@@ -128,14 +129,14 @@ void item_free(item_t *head) {
 
 item_t *
 item_new(SDL_Renderer *renderer, SDL_Point position, align_t align, void *custom_data,
-         SDL_Texture *(*update)(SDL_Renderer *renderer, void *)) {
+         SDL_Texture *(*update)(SDL_Renderer *renderer, struct ITEM_T *)) {
     item_t *item = calloc(1, sizeof(item_t));
     if (item) {
         item->position = position;
         item->align = align;
         item->custom_data = custom_data;
         item->update = update;
-        item->texture = update(renderer, custom_data);
+        item->texture = update(renderer, item);
         item->texture_changed = true;
     }
     return item;
@@ -159,8 +160,8 @@ void *power_create() {
     return item;
 }
 
-SDL_Texture *power_update(SDL_Renderer *renderer, void *custom_data) {
-    time_item_t *item = custom_data;
+SDL_Texture *power_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+    time_item_t *item = _item->custom_data;
     if (!item || !item->font) {
         return NULL;
     }
@@ -196,8 +197,8 @@ void *battery_create() {
     return item;
 }
 
-SDL_Texture *battery_update(SDL_Renderer *renderer, void *custom_data) {
-    time_item_t *item = custom_data;
+SDL_Texture *battery_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+    time_item_t *item = _item->custom_data;
     if (!item || !item->font) {
         return NULL;
     }
@@ -214,11 +215,19 @@ SDL_Texture *battery_update(SDL_Renderer *renderer, void *custom_data) {
             } else if (battery.temp > 40.0) {
                 color = rgba_yellow;
             }
-            return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.2fA %.2fV %.0fC",
-                                      battery.soc, battery.current, battery.voltage, battery.temp);
+
+            if (battery.current > 0.0) {
+                return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC %.0fh",
+                                          battery.soc, battery.current * battery.voltage, battery.temp, (280 - battery.capacity) / battery.current );
+            } else if (battery.current < 0.1) {
+                return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC %.0fh",
+                                          battery.soc, battery.current * battery.voltage, battery.temp, battery.capacity / (-battery.current));
+            }
+            return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC",
+                                      battery.soc, battery.current * battery.voltage, battery.temp);
         } else {
-            return printf_SDL_Texture(renderer, rgba_grey, item->font, "%.0f%% %.2fA %.2fV %.0fC",
-                                      0.0, 0.0, 0.0, 0.0);
+            return printf_SDL_Texture(renderer, rgba_grey, item->font, "%.0f%% %.0fW %.0fC",
+                                      0.0, 0.0, 0.0);
         }
     }
     return NULL;
@@ -236,8 +245,8 @@ void *time_create() {
     return item;
 }
 
-SDL_Texture *time_update(SDL_Renderer *renderer, void *custom_data) {
-    time_item_t *item = custom_data;
+SDL_Texture *time_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+    time_item_t *item = _item->custom_data;
     if (!item || !item->font) {
         return NULL;
     }
@@ -273,10 +282,17 @@ void *img_create(const char *file) {
     return item;
 }
 
+void img_destroy(img_item_t *item) {
+    if (item) {
+        SDL_FreeSurface(item->surface);
+        FREE(item);
+    }
+}
+
 SDL_Texture *colorizeTexture(SDL_Renderer *renderer, const SDL_Surface *surface, SDL_Color c);
 
-SDL_Texture *img_main_power_update(SDL_Renderer *renderer, void *custom_data) {
-    img_item_t *item = custom_data;
+SDL_Texture *img_main_power_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+    img_item_t *item = _item->custom_data;
     if (!item || !item->surface) {
         return NULL;
     }
@@ -293,8 +309,8 @@ SDL_Texture *img_main_power_update(SDL_Renderer *renderer, void *custom_data) {
     return NULL;
 }
 
-SDL_Texture *img_main_power_update2(SDL_Renderer *renderer, void *custom_data) {
-    img_item_t *item = custom_data;
+SDL_Texture *img_main_power_update2(SDL_Renderer *renderer, struct ITEM_T * _item) {
+    img_item_t *item = _item->custom_data;
     if (!item || !item->surface) {
         return NULL;
     }
@@ -310,15 +326,65 @@ SDL_Texture *img_main_power_update2(SDL_Renderer *renderer, void *custom_data) {
     }
     return NULL;
 }
+typedef enum battery_state_t {
+    BATTERY_STATE_UNKNOWN,
+    BATTERY_STATE_CHARGING,
+    BATTERY_STATE_FULL,
+    BATTERY_STATE_DISCHARGING_0,
+    BATTERY_STATE_DISCHARGING_1,
+    BATTERY_STATE_DISCHARGING_2,
+    BATTERY_STATE_DISCHARGING_3,
+    BATTERY_STATE_DISCHARGING_4,
+    BATTERY_STATE_DISCHARGING_5,
+    BATTERY_STATE_DISCHARGING_6,
+    BATTERY_STATE_NONE,
+} battery_state_t;
 
-SDL_Texture *img_main_battery_update(SDL_Renderer *renderer, void *custom_data) {
-    img_item_t *item = custom_data;
+const char *battery_state_picture[] = {
+        [BATTERY_STATE_UNKNOWN] = "/home/palich/bin/outline_battery_unknown_black_24.png",
+        [BATTERY_STATE_CHARGING] = "/home/palich/bin/outline_battery_charging_full_black_24.png",
+        [BATTERY_STATE_FULL] = "/home/palich/bin/outline_battery_full_black_24.png",
+        [BATTERY_STATE_DISCHARGING_0] = "/home/palich/bin/outline_battery_0_bar_black_24.png",
+        [BATTERY_STATE_DISCHARGING_1] = "/home/palich/bin/outline_battery_1_bar_black_24.png",
+        [BATTERY_STATE_DISCHARGING_2] = "/home/palich/bin/outline_battery_2_bar_black_24.png",
+        [BATTERY_STATE_DISCHARGING_3] = "/home/palich/bin/outline_battery_3_bar_black_24.png",
+        [BATTERY_STATE_DISCHARGING_4] = "/home/palich/bin/outline_battery_4_bar_black_24.png",
+        [BATTERY_STATE_DISCHARGING_5] = "/home/palich/bin/outline_battery_5_bar_black_24.png",
+        [BATTERY_STATE_DISCHARGING_6] = "/home/palich/bin/outline_battery_6_bar_black_24.png",
+};
+
+battery_state_t get_battery_state(void){
+    if (isnan(battery.soc) || !battery.online) return BATTERY_STATE_UNKNOWN;
+    if (battery.current > 0.0) return BATTERY_STATE_CHARGING;
+    if (battery.current < 0.1) {
+        if (battery.soc < 10.0) return BATTERY_STATE_DISCHARGING_0;
+        if (battery.soc < 25.0) return BATTERY_STATE_DISCHARGING_1;
+        if (battery.soc < 40.0) return BATTERY_STATE_DISCHARGING_2;
+        if (battery.soc < 55.0) return BATTERY_STATE_DISCHARGING_3;
+        if (battery.soc < 70.0) return BATTERY_STATE_DISCHARGING_4;
+        if (battery.soc < 85.0) return BATTERY_STATE_DISCHARGING_5;
+        if (battery.soc < 90.0) return BATTERY_STATE_DISCHARGING_6;
+    }
+    return BATTERY_STATE_FULL;
+}
+
+SDL_Texture *img_main_battery_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+    img_item_t *item = _item->custom_data;
     if (!item || !item->surface) {
         return NULL;
     }
 
     static double last_soc = -1;
     if (battery.soc != last_soc) {
+        battery_state_t state = get_battery_state();
+        static battery_state_t last_state = BATTERY_STATE_NONE;
+        if (state != last_state) {
+            last_state = state;
+            img_destroy(item);
+            _item->custom_data=img_create(battery_state_picture[state]);
+            item = _item->custom_data;
+        }
+
         last_soc = battery.soc;
         if (isnan(battery.soc)) {
             return colorizeTexture(renderer, item->surface, rgba_grey);
@@ -428,7 +494,7 @@ bool make_textures(SDL_Renderer *renderer, item_t *head) {
     bool changed = false;
 
     while (head) {
-        SDL_Texture *new_texture = head->update(renderer, head->custom_data);
+        SDL_Texture *new_texture = head->update(renderer, head);
         if (new_texture) {
             SDL_DestroyTexture(head->texture);
             head->texture = new_texture;
@@ -670,8 +736,15 @@ void battery_cb(const struct mosquitto_message *msg) {
         battery.changed = true;
         battery.temp = temp;
     }
-    daemon_log(LOG_INFO, "soc: %.0f%%, current: %.2fA, voltage: %.2fV, power:%.2fW temp: %.0fC", soc, current, voltage,
-               current * voltage, temp);
+    json_object *j_capacity = NULL;
+    json_object_object_get_ex(jobj, "capacity", &j_capacity);
+    double capacity = json_object_get_double(j_capacity);
+    if (capacity != battery.capacity) {
+        battery.changed = true;
+        battery.capacity = capacity;
+    }
+    daemon_log(LOG_INFO, "soc: %.0f%%, current: %.2fA, voltage: %.2fV, power:%.2fW temp: %.0fC capacity: %.0f", soc, current, voltage,
+               current * voltage, temp, capacity);
     json_object_put(jobj);
 }
 
