@@ -143,10 +143,77 @@ item_new(SDL_Renderer *renderer, SDL_Point position, align_t align, void *custom
 }
 
 /*********************************************************************************************************************/
+struct weather_t {
+    double temperature_indoor;
+    double temperature_outdoor;
+    bool temperature_outdoor_online;
+    bool temperature_indoor_online;
+    bool temperature_indoor_changed;
+    bool temperature_outdoor_changed;
+} weather = {NAN, NAN, false, false, true, true};
+
 typedef struct {
     TTF_Font *font;
     time_t last_time;
 } time_item_t;
+
+void *indoor_temp_create(void) {
+    time_item_t *item = calloc(1, sizeof(time_item_t));
+    if (item) {
+        item->font = TTF_OpenFont("/home/palich/bin/freesansbold.ttf", 50);
+        if (!item->font) {
+            printf("TTF_OpenFont: %s\n", TTF_GetError());
+            FREE(item);
+        }
+    }
+    return item;
+}
+
+SDL_Texture *indoor_temp_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
+    time_item_t *item = _item->custom_data;
+    if (!item || !item->font) {
+        return NULL;
+    }
+    if (weather.temperature_indoor_changed) {
+        weather.temperature_indoor_changed = false;
+        if (weather.temperature_indoor_online && !isnan(weather.temperature_indoor)) {
+            return printf_SDL_Texture(renderer, rgba_white, item->font, "%.1fC",
+                                      weather.temperature_indoor);
+        } else {
+            return printf_SDL_Texture(renderer, rgba_grey, item->font, "--.-C");
+        }
+    }
+    return NULL;
+}
+
+void *outdoor_temp_create(void) {
+    time_item_t *item = calloc(1, sizeof(time_item_t));
+    if (item) {
+        item->font = TTF_OpenFont("/home/palich/bin/freesansbold.ttf", 50);
+        if (!item->font) {
+            printf("TTF_OpenFont: %s\n", TTF_GetError());
+            FREE(item);
+        }
+    }
+    return item;
+}
+
+SDL_Texture *outdoor_temp_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
+    time_item_t *item = _item->custom_data;
+    if (!item || !item->font) {
+        return NULL;
+    }
+    if (weather.temperature_outdoor_changed) {
+        weather.temperature_outdoor_changed = false;
+        if (weather.temperature_outdoor_online && !isnan(weather.temperature_outdoor)) {
+            return printf_SDL_Texture(renderer, rgba_white, item->font, "%.1fC",
+                                      weather.temperature_outdoor);
+        } else {
+            return printf_SDL_Texture(renderer, rgba_grey, item->font, "--.-C");
+        }
+    }
+    return NULL;
+}
 
 void *power_create() {
     time_item_t *item = calloc(1, sizeof(time_item_t));
@@ -160,7 +227,7 @@ void *power_create() {
     return item;
 }
 
-SDL_Texture *power_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+SDL_Texture *power_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
     time_item_t *item = _item->custom_data;
     if (!item || !item->font) {
         return NULL;
@@ -197,7 +264,7 @@ void *battery_create() {
     return item;
 }
 
-SDL_Texture *battery_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+SDL_Texture *battery_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
     time_item_t *item = _item->custom_data;
     if (!item || !item->font) {
         return NULL;
@@ -215,16 +282,20 @@ SDL_Texture *battery_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
             } else if (battery.temp > 40.0) {
                 color = rgba_yellow;
             }
-
-            if (battery.current > 0.0) {
+            daemon_log(LOG_INFO, "battery: %.0f%% %.2fA %.0fC",
+                       battery.soc, battery.current, battery.temp
+                       );
+            if (battery.current > 0.2) {
                 return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC %.0fh",
-                                          battery.soc, battery.current * battery.voltage, battery.temp, (280 - battery.capacity) / battery.current );
-            } else if (battery.current < 0.1) {
+                                          battery.soc, battery.current * battery.voltage, battery.temp,
+                                          (280 - battery.capacity) / battery.current);
+            } else if (battery.current < -0.2) {
                 return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC %.0fh",
-                                          battery.soc, battery.current * battery.voltage, battery.temp, battery.capacity / (-battery.current));
+                                          battery.soc, battery.current * battery.voltage, battery.temp,
+                                          battery.capacity / (-battery.current));
             }
-            return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC",
-                                      battery.soc, battery.current * battery.voltage, battery.temp);
+            return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fC",
+                                      battery.soc, battery.temp);
         } else {
             return printf_SDL_Texture(renderer, rgba_grey, item->font, "%.0f%% %.0fW %.0fC",
                                       0.0, 0.0, 0.0);
@@ -245,7 +316,7 @@ void *time_create() {
     return item;
 }
 
-SDL_Texture *time_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+SDL_Texture *time_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
     time_item_t *item = _item->custom_data;
     if (!item || !item->font) {
         return NULL;
@@ -291,7 +362,7 @@ void img_destroy(img_item_t *item) {
 
 SDL_Texture *colorizeTexture(SDL_Renderer *renderer, const SDL_Surface *surface, SDL_Color c);
 
-SDL_Texture *img_main_power_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+SDL_Texture *img_main_power_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
     img_item_t *item = _item->custom_data;
     if (!item || !item->surface) {
         return NULL;
@@ -309,7 +380,7 @@ SDL_Texture *img_main_power_update(SDL_Renderer *renderer, struct ITEM_T * _item
     return NULL;
 }
 
-SDL_Texture *img_main_power_update2(SDL_Renderer *renderer, struct ITEM_T * _item) {
+SDL_Texture *img_main_power_update2(SDL_Renderer *renderer, struct ITEM_T *_item) {
     img_item_t *item = _item->custom_data;
     if (!item || !item->surface) {
         return NULL;
@@ -326,6 +397,7 @@ SDL_Texture *img_main_power_update2(SDL_Renderer *renderer, struct ITEM_T * _ite
     }
     return NULL;
 }
+
 typedef enum battery_state_t {
     BATTERY_STATE_UNKNOWN,
     BATTERY_STATE_CHARGING,
@@ -353,7 +425,7 @@ const char *battery_state_picture[] = {
         [BATTERY_STATE_DISCHARGING_6] = "/home/palich/bin/outline_battery_6_bar_black_24.png",
 };
 
-battery_state_t get_battery_state(void){
+battery_state_t get_battery_state(void) {
     if (isnan(battery.soc) || !battery.online) return BATTERY_STATE_UNKNOWN;
     if (battery.current > 0.0) return BATTERY_STATE_CHARGING;
     if (battery.current < 0.1) {
@@ -363,29 +435,24 @@ battery_state_t get_battery_state(void){
         if (battery.soc < 55.0) return BATTERY_STATE_DISCHARGING_3;
         if (battery.soc < 70.0) return BATTERY_STATE_DISCHARGING_4;
         if (battery.soc < 85.0) return BATTERY_STATE_DISCHARGING_5;
-        if (battery.soc < 90.0) return BATTERY_STATE_DISCHARGING_6;
+        if (battery.soc < 95.0) return BATTERY_STATE_DISCHARGING_6;
     }
     return BATTERY_STATE_FULL;
 }
 
-SDL_Texture *img_main_battery_update(SDL_Renderer *renderer, struct ITEM_T * _item) {
+SDL_Texture *img_main_battery_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
     img_item_t *item = _item->custom_data;
     if (!item || !item->surface) {
         return NULL;
     }
-
-    static double last_soc = -1;
-    if (battery.soc != last_soc) {
-        battery_state_t state = get_battery_state();
-        static battery_state_t last_state = BATTERY_STATE_NONE;
-        if (state != last_state) {
-            last_state = state;
-            img_destroy(item);
-            _item->custom_data=img_create(battery_state_picture[state]);
-            item = _item->custom_data;
-        }
-
-        last_soc = battery.soc;
+    static battery_state_t last_state = BATTERY_STATE_NONE;
+    battery_state_t state = get_battery_state();
+    if (state != last_state) {
+        daemon_log(LOG_INFO, "battery state changed: %d", state);
+        last_state = state;
+        img_destroy(item);
+        _item->custom_data = img_create(battery_state_picture[state]);
+        item = _item->custom_data;
         if (isnan(battery.soc)) {
             return colorizeTexture(renderer, item->surface, rgba_grey);
         } else if (battery.soc < 20) {
@@ -422,6 +489,18 @@ void init_textures(SDL_Renderer *renderer) {
         SDL_Point pos = {screenWidth / 2, screenHeight * 3 / 4};
         align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
         item_add(&root, item_new(renderer, pos, align, power_create(), power_update));
+    }
+
+    {
+        SDL_Point pos = {screenWidth / 3 - 90, screenHeight * 3 / 4 - 50};
+        align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
+        item_add(&root, item_new(renderer, pos, align, indoor_temp_create(), indoor_temp_update));
+    }
+
+    {
+        SDL_Point pos = {screenWidth * 2 / 3 + 90, screenHeight * 3 / 4 - 50};
+        align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
+        item_add(&root, item_new(renderer, pos, align, outdoor_temp_create(), outdoor_temp_update));
     }
 
     {
@@ -743,7 +822,8 @@ void battery_cb(const struct mosquitto_message *msg) {
         battery.changed = true;
         battery.capacity = capacity;
     }
-    daemon_log(LOG_INFO, "soc: %.0f%%, current: %.2fA, voltage: %.2fV, power:%.2fW temp: %.0fC capacity: %.0f", soc, current, voltage,
+    daemon_log(LOG_INFO, "soc: %.0f%%, current: %.2fA, voltage: %.2fV, power:%.2fW temp: %.0fC capacity: %.0f", soc,
+               current, voltage,
                current * voltage, temp, capacity);
     json_object_put(jobj);
 }
@@ -783,6 +863,45 @@ void main_battery_lwt_cb(const struct mosquitto_message *msg) {
     battery.online = strcmp((char *) msg->payload, "Online") == 0;
 }
 
+
+//{"Time":"2023-11-08T14:55:49","IN":{"time": "2023-11-08 14:55:32","brand": "ODROID","model": "WB2","id": 0,"channel": 1,"battery": "OK","temperature_C": 25.47,"humidity": 53.48,"pressure": 984.9,"altitude": 329.2581,"uv_index": 0.01,"visible": 206,"ir": 30},"EX":{"time": "2023-11-08 14:55:36","brand": "OS","model": "Oregon-THGR122N","id": 249,"channel": 1,"battery_ok": 1,"temperature_C": 9.3,"humidity": 87}}
+void outdoor_cb(const struct mosquitto_message *msg) {
+    json_object *jobj = json_tokener_parse(msg->payload);
+    json_object *j_in = NULL;
+    json_object_object_get_ex(jobj, "EX", &j_in);
+    json_object *j_temperature = NULL;
+    json_object_object_get_ex(j_in, "temperature_C", &j_temperature);
+    double temperature = json_object_get_double(j_temperature);
+    if (temperature != weather.temperature_outdoor) {
+        weather.temperature_outdoor_changed = true;
+        weather.temperature_outdoor = temperature;
+    }
+    daemon_log(LOG_INFO, "outdoor temperature: %.1fC", weather.temperature_outdoor);
+    json_object_put(jobj);
+}
+
+void outdoor_lwt_cb(const struct mosquitto_message *msg) {
+    weather.temperature_outdoor_online = strcasecmp((char *) msg->payload, "Online") == 0;
+}
+
+// {"battery":100,"humidity":51.52,"last_seen":"2023-11-08T12:53:56.724Z","linkquality":76,"pressure":984.7,"temperature":23.39,"voltage":3005}
+void thps_sf_hall_cb(const struct mosquitto_message *msg) {
+    json_object *jobj = json_tokener_parse(msg->payload);
+    json_object *j_temperature = NULL;
+    json_object_object_get_ex(jobj, "temperature", &j_temperature);
+    double temperature = json_object_get_double(j_temperature);
+    if (temperature != weather.temperature_indoor) {
+        weather.temperature_indoor_changed = true;
+        weather.temperature_indoor = temperature;
+    }
+    daemon_log(LOG_INFO, "indoor temperature: %.1fC", weather.temperature_indoor);
+    json_object_put(jobj);
+}
+
+void thps_sf_hall_lwt_cb(const struct mosquitto_message *msg) {
+    weather.temperature_indoor_online = strcasecmp((char *) msg->payload, "Online") == 0;
+}
+
 #define HOSTNAME_SIZE 256
 #define CDIR "./"
 
@@ -804,7 +923,7 @@ int main(int UNUSED(argc), char *const *argv) {
         pathname = xstrdup(CDIR);
     else {
         pathname = xmalloc(strlen(argv[0]) + 1);
-        strncpy(pathname, argv[0], (size_t) (strrchr(argv[0], '/') - argv[0]) + 1);
+        strncpy(pathname, argv[0], (size_t)(strrchr(argv[0], '/') - argv[0]) + 1);
     }
 
     if (chdir(pathname) < 0) {
@@ -848,6 +967,10 @@ int main(int UNUSED(argc), char *const *argv) {
     mosq_register_on_message_cb("tele/main-power/SENSOR", main_power_cb);
     mosq_register_on_message_cb("tele/main-power/LWT", main_power_lwt_cb);
     mosq_register_on_message_cb("tele/main_battery/LWT", main_battery_lwt_cb);
+    mosq_register_on_message_cb("tele/hass/SENSOR", outdoor_cb);
+    mosq_register_on_message_cb("tele/hass/LWT", outdoor_lwt_cb);
+    mosq_register_on_message_cb("zigbee2mqtt/thps_sf_hall", thps_sf_hall_cb);
+    mosq_register_on_message_cb("zigbee2mqtt/thps_sf_hall/availability", thps_sf_hall_lwt_cb);
 
     time_t last_active = time(NULL);
     bool first = true;
