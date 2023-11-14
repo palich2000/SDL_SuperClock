@@ -105,17 +105,53 @@ void item_add(item_t **head, item_t *item) {
     *head = item;
 }
 
-SDL_Texture *printf_SDL_Texture(SDL_Renderer *renderer, SDL_Color color, TTF_Font *font, const char *format, ...) {
+typedef struct {
+    SDL_Color color;
+    char *text;
+} color_text_item_t;
+
+typedef struct {
+    TTF_Font *font;
+    time_t last_time;
+    color_text_item_t text;
+} time_item_t;
+
+SDL_Texture *printf_SDL_Texture(SDL_Renderer *renderer, time_item_t *item, SDL_Color color, const char *format, ...) {
     va_list args;
     va_start(args, format);
-    char buffer[1024] = {0};
-    vsnprintf(buffer, sizeof(buffer) - 1, format, args);
+    char *buf = NULL;
+    vasprintf(&buf, format, args);
     va_end(args);
-    printf("buffer: %s\n", buffer);
-    SDL_Surface *surface = TTF_RenderText_Solid(font, buffer, color);
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
-    SDL_FreeSurface(surface);
-    return texture;
+    if (buf) {
+        daemon_log(LOG_INFO, "buf: %s", buf);
+        bool changed = false;
+        if (memcmp(&color, &item->text.color, sizeof(SDL_Color))) {
+            item->text.color = color;
+            daemon_log(LOG_INFO, "color changed");
+            changed = true;
+        }
+        if (item->text.text) {
+            if (strcmp(item->text.text, buf)) {
+                daemon_log(LOG_INFO, "text changed %s %s", item->text.text, buf);
+                FREE(item->text.text);
+                item->text.text = buf;
+                changed = true;
+            } else {
+                FREE(buf);
+            }
+        } else {
+            daemon_log(LOG_INFO, "text changed %s", buf);
+            item->text.text = buf;
+            changed = true;
+        }
+        if (changed) {
+            SDL_Surface *surface = TTF_RenderText_Solid(item->font, item->text.text, item->text.color);
+            SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
+            SDL_FreeSurface(surface);
+            return texture;
+        }
+    }
+    return NULL;
 }
 
 void item_free(item_t *head) {
@@ -152,10 +188,6 @@ struct weather_t {
     bool temperature_outdoor_changed;
 } weather = {NAN, NAN, false, false, true, true};
 
-typedef struct {
-    TTF_Font *font;
-    time_t last_time;
-} time_item_t;
 
 void *indoor_temp_create(void) {
     time_item_t *item = calloc(1, sizeof(time_item_t));
@@ -177,10 +209,10 @@ SDL_Texture *indoor_temp_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
     if (weather.temperature_indoor_changed) {
         weather.temperature_indoor_changed = false;
         if (weather.temperature_indoor_online && !isnan(weather.temperature_indoor)) {
-            return printf_SDL_Texture(renderer, rgba_white, item->font, "%.1fC",
+            return printf_SDL_Texture(renderer, item, rgba_white, "%.1fC",
                                       weather.temperature_indoor);
         } else {
-            return printf_SDL_Texture(renderer, rgba_grey, item->font, "--.-C");
+            return printf_SDL_Texture(renderer, item, rgba_grey, "--.-C");
         }
     }
     return NULL;
@@ -203,13 +235,14 @@ SDL_Texture *outdoor_temp_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
     if (!item || !item->font) {
         return NULL;
     }
+
     if (weather.temperature_outdoor_changed) {
         weather.temperature_outdoor_changed = false;
         if (weather.temperature_outdoor_online && !isnan(weather.temperature_outdoor)) {
-            return printf_SDL_Texture(renderer, rgba_white, item->font, "%.1fC",
+            return printf_SDL_Texture(renderer, item, rgba_white, "%.1fC",
                                       weather.temperature_outdoor);
         } else {
-            return printf_SDL_Texture(renderer, rgba_grey, item->font, "--.-C");
+            return printf_SDL_Texture(renderer, item, rgba_grey, "--.-C");
         }
     }
     return NULL;
@@ -241,10 +274,10 @@ SDL_Texture *power_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
             } else if (main_power.power > 4000.0) {
                 color = rgba_red;
             }
-            return printf_SDL_Texture(renderer, color, item->font, "%.0fW %.0fV",
+            return printf_SDL_Texture(renderer, item, color, "%.0fW %.0fV",
                                       main_power.power, main_power.voltage);
         } else {
-            return printf_SDL_Texture(renderer, rgba_grey, item->font, "%.0fW %.0fV",
+            return printf_SDL_Texture(renderer, item, rgba_grey, "%.0fW %.0fV",
                                       0.0, 0);
         }
     }
@@ -284,20 +317,20 @@ SDL_Texture *battery_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
             }
             daemon_log(LOG_INFO, "battery: %.0f%% %.2fA %.0fC",
                        battery.soc, battery.current, battery.temp
-                       );
+            );
             if (battery.current > 0.2) {
-                return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC %.0fh",
+                return printf_SDL_Texture(renderer, item, color, "%.0f%% %.0fW %.0fC %.0fh",
                                           battery.soc, battery.current * battery.voltage, battery.temp,
                                           (280 - battery.capacity) / battery.current);
             } else if (battery.current < -0.2) {
-                return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fW %.0fC %.0fh",
+                return printf_SDL_Texture(renderer, item, color, "%.0f%% %.0fW %.0fC %.0fh",
                                           battery.soc, battery.current * battery.voltage, battery.temp,
                                           battery.capacity / (-battery.current));
             }
-            return printf_SDL_Texture(renderer, color, item->font, "%.0f%% %.0fC",
+            return printf_SDL_Texture(renderer, item, color, "%.0f%% %.0fC",
                                       battery.soc, battery.temp);
         } else {
-            return printf_SDL_Texture(renderer, rgba_grey, item->font, "%.0f%% %.0fW %.0fC",
+            return printf_SDL_Texture(renderer, item, rgba_grey, "%.0f%% %.0fW %.0fC",
                                       0.0, 0.0, 0.0);
         }
     }
@@ -328,7 +361,7 @@ SDL_Texture *time_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
         item->last_time = minutes;
         struct tm *now_local = localtime(&now);
         SDL_Color color = {255, 255, 255, 255};
-        return printf_SDL_Texture(renderer, color, item->font, "%02d:%02d", now_local->tm_hour,
+        return printf_SDL_Texture(renderer, item, color, "%02d:%02d", now_local->tm_hour,
                                   now_local->tm_min);
     }
     return NULL;
@@ -961,7 +994,6 @@ int main(int UNUSED(argc), char *const *argv) {
     init_textures(sc.rend);
     SDL_ShowCursor(SDL_DISABLE);
     brightnessInit();
-    mosq_init("superclock-sdl", hostname);
 
     mosq_register_on_message_cb("tele/main_battery/SENSOR", battery_cb);
     mosq_register_on_message_cb("tele/main-power/SENSOR", main_power_cb);
@@ -971,6 +1003,8 @@ int main(int UNUSED(argc), char *const *argv) {
     mosq_register_on_message_cb("tele/hass/LWT", outdoor_lwt_cb);
     mosq_register_on_message_cb("zigbee2mqtt/thps_sf_hall", thps_sf_hall_cb);
     mosq_register_on_message_cb("zigbee2mqtt/thps_sf_hall/availability", thps_sf_hall_lwt_cb);
+
+    mosq_init("superclock-sdl", hostname);
 
     time_t last_active = time(NULL);
     bool first = true;

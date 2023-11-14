@@ -227,12 +227,22 @@ void on_log(struct mosquitto *UNUSED(mosq), void *UNUSED(userdata), int level, c
     }
 }
 
+typedef struct _mosq_cb_info_t {
+    const char *topic;
+    mosq_cb_t cb;
+} t_mosq_cb_info;
+
+t_mosq_cb_info mosq_info[10] ={0};
+size_t mosq_info_count = 0;
+
 static
 void on_connect(struct mosquitto *m, void *UNUSED(udata), int res) {
     daemon_log(LOG_INFO, "%s", __FUNCTION__);
     switch (res) {
         case 0:
-            mosquitto_subscribe(m, NULL, "stat/+/POWER", 0);
+            for (size_t i=0; i<sizeof(mosq_info) / sizeof(mosq_info[0]); i++) {
+                mosquitto_subscribe(m, NULL, mosq_info[i].topic, 0);
+            }
             mqtt_publish_lwt(true);
             publish_state();
             break;
@@ -255,14 +265,6 @@ void on_connect(struct mosquitto *m, void *UNUSED(udata), int res) {
 }
 
 
-typedef struct _mosq_cb_info_t {
-    const char *topic;
-    mosq_cb_t cb;
-} t_mosq_cb_info;
-
-t_mosq_cb_info mosq_info[10] ={0};
-size_t mosq_info_count = 0;
-
 static
 void on_message(struct mosquitto *UNUSED(m), void *UNUSED(udata),
                 const struct mosquitto_message *msg) {
@@ -281,7 +283,7 @@ void on_message(struct mosquitto *UNUSED(m), void *UNUSED(udata),
 }
 
 void mosq_register_on_message_cb(const char * topic, mosq_cb_t cb) {
-    mosquitto_subscribe(mosq, NULL, topic, 0);
+    //
     if (mosq_info_count < sizeof(mosq_info) / sizeof(mosq_info[0])) {
         mosq_info[mosq_info_count].cb = cb;
         mosq_info[mosq_info_count].topic = strdup(topic);
