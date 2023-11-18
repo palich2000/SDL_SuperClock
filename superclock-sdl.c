@@ -75,8 +75,13 @@ typedef struct {
     align_v_t align_v;
 } align_t;
 
+
 struct ITEM_T;
+
+typedef void (*on_click_cb_t)(struct ITEM_T *item);
+
 typedef struct ITEM_T {
+    const char *name;
     SDL_Point position;
     SDL_Texture *texture;
     void *custom_data;
@@ -85,6 +90,7 @@ typedef struct ITEM_T {
 
     bool texture_changed;
     align_t align;
+    on_click_cb_t on_click;
     struct ITEM_T *next;
 } item_t;
 
@@ -164,10 +170,11 @@ void item_free(item_t *head) {
 }
 
 item_t *
-item_new(SDL_Renderer *renderer, SDL_Point position, align_t align, void *custom_data,
+item_new(const char *name, SDL_Renderer *renderer, SDL_Point position, align_t align, void *custom_data,
          SDL_Texture *(*update)(SDL_Renderer *renderer, struct ITEM_T *)) {
     item_t *item = calloc(1, sizeof(item_t));
     if (item) {
+        item->name = name;
         item->position = position;
         item->align = align;
         item->custom_data = custom_data;
@@ -176,6 +183,15 @@ item_new(SDL_Renderer *renderer, SDL_Point position, align_t align, void *custom
         item->texture_changed = true;
     }
     return item;
+}
+
+SDL_Color lerp_color(const SDL_Color color1, const SDL_Color color2, float t) {
+    SDL_Color result;
+    result.r = (Uint8)(color1.r + t * (color2.r - color1.r));
+    result.g = (Uint8)(color1.g + t * (color2.g - color1.g));
+    result.b = (Uint8)(color1.b + t * (color2.b - color1.b));
+    result.a = (Uint8)(color1.a + t * (color2.a - color1.a));
+    return result;
 }
 
 /*********************************************************************************************************************/
@@ -188,6 +204,11 @@ struct weather_t {
     bool temperature_outdoor_changed;
 } weather = {NAN, NAN, false, false, true, true};
 
+struct door_t {
+    bool online;
+    bool open;
+    bool changed;
+} door = {false, false, true};
 
 void *indoor_temp_create(void) {
     time_item_t *item = calloc(1, sizeof(time_item_t));
@@ -431,6 +452,77 @@ SDL_Texture *img_main_power_update2(SDL_Renderer *renderer, struct ITEM_T *_item
     return NULL;
 }
 
+static bool power_off_pressed = false;
+
+void on_click_power_off(item_t *UNUSED(item)) {
+    power_off_pressed = !power_off_pressed;
+    daemon_log(LOG_INFO, "power_of_off_icon clicked");
+}
+
+SDL_Texture *img_main_power_button_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
+    img_item_t *item = _item->custom_data;
+    if (!item || !item->surface) {
+        return NULL;
+    }
+    static bool first_time = true;
+    if (first_time) {
+        first_time = false;
+        return colorizeTexture(renderer, item->surface, rgba_green);
+    }
+    static bool power_off_pressed_prev = false;
+    static float c = 0.0f;
+
+    if (power_off_pressed != power_off_pressed_prev) {
+        power_off_pressed_prev = power_off_pressed;
+        if (!power_off_pressed) {
+            c = 0.0f;
+            return colorizeTexture(renderer, item->surface, rgba_green);
+        } else {
+            c = 0.1f;
+        }
+    } else {
+        if (power_off_pressed) {
+            static time_t last_time = 0;
+            time_t now;
+            time(&now);
+            if (last_time != now) {
+                last_time = now;
+                c += 0.1;
+                if (c > 1.0) {
+                    static bool first_time = true;
+                    if (first_time) {
+                        first_time = false;
+                        daemon_log(LOG_INFO, "shutdown ret: %d", system("sudo shutdown -P -h now"));
+                    }
+                    return NULL;
+                }
+                return colorizeTexture(renderer, item->surface, lerp_color(rgba_green, rgba_red, c));
+            }
+        }
+    }
+    return NULL;
+}
+
+SDL_Texture *img_front_door_update(SDL_Renderer *renderer, struct ITEM_T *_item) {
+    img_item_t *item = _item->custom_data;
+    if (!item || !item->surface) {
+        return NULL;
+    }
+    if (door.changed) {
+        door.changed = false;
+        if (!door.online) {
+            return colorizeTexture(renderer, item->surface, rgba_grey);
+        } else {
+            if (door.open) {
+                return colorizeTexture(renderer, item->surface, rgba_red);
+            } else {
+                return colorizeTexture(renderer, item->surface, rgba_green);
+            }
+        }
+    }
+    return NULL;
+}
+
 typedef enum battery_state_t {
     BATTERY_STATE_UNKNOWN,
     BATTERY_STATE_CHARGING,
@@ -509,38 +601,38 @@ void init_textures(SDL_Renderer *renderer) {
     {
         SDL_Point pos = {screenWidth / 2, screenHeight / 2};
         align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
-        item_add(&root, item_new(renderer, pos, align, time_create(), time_update));
+        item_add(&root, item_new("time, ", renderer, pos, align, time_create(), time_update));
     }
 
     {
         SDL_Point pos = {screenWidth / 2, screenHeight / 3};
         align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
-        item_add(&root, item_new(renderer, pos, align, battery_create(), battery_update));
+        item_add(&root, item_new("battery", renderer, pos, align, battery_create(), battery_update));
     }
 
     {
         SDL_Point pos = {screenWidth / 2, screenHeight * 3 / 4};
         align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
-        item_add(&root, item_new(renderer, pos, align, power_create(), power_update));
+        item_add(&root, item_new("power", renderer, pos, align, power_create(), power_update));
     }
 
     {
         SDL_Point pos = {screenWidth / 3 - 90, screenHeight * 3 / 4 - 50};
         align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
-        item_add(&root, item_new(renderer, pos, align, indoor_temp_create(), indoor_temp_update));
+        item_add(&root, item_new("indoor temp", renderer, pos, align, indoor_temp_create(), indoor_temp_update));
     }
 
     {
         SDL_Point pos = {screenWidth * 2 / 3 + 90, screenHeight * 3 / 4 - 50};
         align_t align = {ALIGN_H_CENTER, ALIGN_V_CENTER};
-        item_add(&root, item_new(renderer, pos, align, outdoor_temp_create(), outdoor_temp_update));
+        item_add(&root, item_new("outdoor temp", renderer, pos, align, outdoor_temp_create(), outdoor_temp_update));
     }
 
     {
         SDL_Point pos = {20, 20};
 
         align_t align = {ALIGN_LEFT, ALIGN_TOP};
-        item_t *icon = item_new(renderer, pos, align,
+        item_t *icon = item_new("power_green_icon", renderer, pos, align,
                                 img_create("/home/palich/bin/outline_power_black_24dp.png"),
                                 img_main_power_update);
 
@@ -552,7 +644,7 @@ void init_textures(SDL_Renderer *renderer) {
         pos.x = +20 + textureWidth;
         pos.y = 20;
 
-        icon = item_new(renderer, pos, align,
+        icon = item_new("power red icon", renderer, pos, align,
                         img_create("/home/palich/bin/outline_power_off_black_24dp.png"),
                         img_main_power_update2);
 
@@ -563,12 +655,36 @@ void init_textures(SDL_Renderer *renderer) {
         pos.x += 20 + textureWidth;
         pos.y = 20;
 
-        icon = item_new(renderer, pos, align,
+        icon = item_new("battery icon", renderer, pos, align,
                         img_create("/home/palich/bin/outline_battery_charging_full_black_24dp.png"),
                         img_main_battery_update);
 
         item_add(&root, icon);
 
+    }
+
+    {
+        SDL_Point pos = {screenWidth - 70, 20};
+
+        align_t align = {ALIGN_LEFT, ALIGN_TOP};
+        item_t *icon = item_new("power_of_off_icon", renderer, pos, align,
+                                img_create("/home/palich/bin/outline_power_settings_new_black_24dp.png"),
+                                img_main_power_button_update);
+        if (icon) {
+            icon->on_click = on_click_power_off;
+        }
+        item_add(&root, icon);
+
+        int textureWidth, textureHeight;
+        SDL_QueryTexture(icon->texture, NULL, NULL, &textureWidth, &textureHeight);
+
+        pos = (SDL_Point) {screenWidth - 70 - textureWidth - 20, 20};
+
+        align = (align_t) {ALIGN_LEFT, ALIGN_TOP};
+        icon = item_new("door_icon", renderer, pos, align,
+                        img_create("/home/palich/bin/outline_door_front_black_24dp.png"),
+                        img_front_door_update);
+        item_add(&root, icon);
 
     }
 }
@@ -914,6 +1030,7 @@ void outdoor_cb(const struct mosquitto_message *msg) {
 }
 
 void outdoor_lwt_cb(const struct mosquitto_message *msg) {
+    daemon_log(LOG_INFO, "outdoor_lwt: %.*s", msg->payloadlen, (char *) msg->payload);
     weather.temperature_outdoor_online = strcasecmp((char *) msg->payload, "Online") == 0;
 }
 
@@ -933,6 +1050,43 @@ void thps_sf_hall_cb(const struct mosquitto_message *msg) {
 
 void thps_sf_hall_lwt_cb(const struct mosquitto_message *msg) {
     weather.temperature_indoor_online = strcasecmp((char *) msg->payload, "Online") == 0;
+}
+
+void dos_entranse_lwt_cb(const struct mosquitto_message *msg) {
+    door.online = strcasecmp((char *) msg->payload, "Online") == 0;
+    door.changed = true;
+}
+
+void dos_entranse_cb(const struct mosquitto_message *msg) {
+    json_object *root = json_tokener_parse(msg->payload);
+    if (root) {
+        json_object *j_contact = NULL;
+        json_object_object_get_ex(root, "contact", &j_contact);
+        bool contact = json_object_get_boolean(j_contact);
+        if (!contact != door.open) {
+            door.open = !contact;
+            daemon_log(LOG_INFO, "door open: %d", door.open);
+            door.changed = true;
+        }
+        json_object_put(root);
+    }
+}
+
+item_t *detect_where_mouse_pressed(int x, int y) {
+    for (item_t *item = root; item; item = item->next) {
+        int textureWidth, textureHeight;
+
+        SDL_QueryTexture(item->texture, NULL, NULL, &textureWidth, &textureHeight);
+
+        SDL_Rect rect = {align_h(item->position.x, textureWidth, item->align.align_h),
+                         align_v(item->position.y, textureHeight, item->align.align_v),
+                         textureWidth,
+                         textureHeight};
+        if (SDL_PointInRect(&(SDL_Point) {x, y}, &rect)) {
+            return item;
+        }
+    }
+    return NULL;
 }
 
 #define HOSTNAME_SIZE 256
@@ -1003,6 +1157,8 @@ int main(int UNUSED(argc), char *const *argv) {
     mosq_register_on_message_cb("tele/hass/LWT", outdoor_lwt_cb);
     mosq_register_on_message_cb("zigbee2mqtt/thps_sf_hall", thps_sf_hall_cb);
     mosq_register_on_message_cb("zigbee2mqtt/thps_sf_hall/availability", thps_sf_hall_lwt_cb);
+    mosq_register_on_message_cb("zigbee2mqtt/dos-entranse/availability", dos_entranse_lwt_cb);
+    mosq_register_on_message_cb("zigbee2mqtt/dos-entranse", dos_entranse_cb);
 
     mosq_init("superclock-sdl", hostname);
 
@@ -1023,9 +1179,22 @@ int main(int UNUSED(argc), char *const *argv) {
                     }
                     break;
                 case SDL_MOUSEBUTTONDOWN:
-                case SDL_MOUSEMOTION:
+                    //case SDL_MOUSEMOTION:
                     last_active = time(NULL);
                     brightnessSetTo(0);
+                    item_t *item = detect_where_mouse_pressed(event.button.x, event.button.y);
+                    if (item) {
+                        daemon_log(LOG_INFO, "mouse button: %d x:%d y:%d item: %s", event.button.button,
+                                   event.button.x,
+                                   event.button.y, item->name);
+                        if (item->on_click) {
+                            item->on_click(item);
+                        }
+                    } else {
+                        daemon_log(LOG_INFO, "mouse button: %d x:%d y:%d", event.button.button, event.button.x,
+                                   event.button.y);
+
+                    }
                     break;
                 case SDL_KEYDOWN:
                     // keyboard API for key pressed

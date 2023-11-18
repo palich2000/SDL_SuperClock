@@ -240,7 +240,8 @@ void on_connect(struct mosquitto *m, void *UNUSED(udata), int res) {
     daemon_log(LOG_INFO, "%s", __FUNCTION__);
     switch (res) {
         case 0:
-            for (size_t i=0; i<sizeof(mosq_info) / sizeof(mosq_info[0]); i++) {
+            for (size_t i=0; i<mosq_info_count; i++) {
+                daemon_log(LOG_INFO, "subscribe to %s", mosq_info[i].topic);
                 mosquitto_subscribe(m, NULL, mosq_info[i].topic, 0);
             }
             mqtt_publish_lwt(true);
